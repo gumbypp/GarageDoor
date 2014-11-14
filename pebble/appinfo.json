@@ -1,0 +1,17 @@
+{
+  "uuid": "e69c7501-4a86-4d86-aafd-dd39b4305c03",
+  "shortName": "Garage Door",
+  "longName": "Garage Door",
+  "companyName": "gumbypp consulting",
+  "versionCode": 1,
+  "versionLabel": "1.0.0",
+  "watchapp": {
+    "watchface": false
+  },
+  "appKeys": {
+    "dummy": 0
+  },
+  "resources": {
+    "media": []
+  }
+}
