@@ -24,7 +24,7 @@ Here's the setup in my garage:
 
 ## Schematic
 
-![Schematic](gd_schematic.jpg)
+![Schematic](gd_schematic.png)
 
 ## Communications
 
