@@ -17,17 +17,33 @@
 //"services.h/spi.h/boards.h" is needed in every new project
 #include <SPI.h>
 #include <boards.h>
+
+//#define USE_BLE_MINI
+
+#ifdef USE_BLE_MINI
+#include <ble_mini.h>
+
+#define ble_available BLEMini_available
+#define ble_read BLEMini_read
+#define ble_write BLEMini_write
+#define ble_connected() false
+
+#else
 #include <ble_shield.h>
+#endif
+
 #include <MD5.h>
 #include <TimerOne.h>
 #include "shared_key.h"
 #include "shared_protocol.h"
 
+#ifndef USE_BLE_MINI
 // project-specific BLE service definition
 #include <services.h>
 #include <lib_aci.h>
 static hal_aci_data_t g_setup_msgs[NB_SETUP_MESSAGES] PROGMEM = SETUP_MESSAGES_CONTENT;
 static services_pipe_type_mapping_t g_services_pipe_type_mapping[NUMBER_OF_PIPES] = SERVICES_PIPE_TYPE_MAPPING_CONTENT;
+#endif
 
 union long_hex {
     uint32_t lunsign;
@@ -47,7 +63,11 @@ typedef enum {
 } app_state_enum;
 
 // application
+#ifdef USE_BLE_MINI
+#define kAutoCloseDisabledDIPin       6
+#else
 #define kAutoCloseDisabledDIPin       1
+#endif
 #define kGarageOpenStatusDIPin        2
 #define kGarageClosedStatusDIPin      3
 #define kGarageControlDOPin           4
@@ -62,6 +82,9 @@ static union long_hex key_part;
 static app_state_enum app_state = app_state_normal;
 static int autoshut_dooropencount = 0;
 static int autoshut_countdown;
+
+// fwd declare
+void timerCallback();
 
 uint8_t *get_signature_for_bytes(uint8_t *bytes, uint16_t length, uint32_t key1, uint32_t key2)
 {
@@ -97,12 +120,17 @@ void setup()
   randomSeed(seed);
   key_part.lunsign = 0;
   
+#ifndef USE_BLE_MINI
   // Enable serial debug
   Serial.begin(57600);
   Serial.print("\n*** GarageDoor starting - random seed:");
   Serial.print(seed);
   Serial.print("\n");    
+#endif
     
+#ifdef USE_BLE_MINI
+  BLEMini_begin(57600);
+#else
   // Default pins set to 9 and 8 for REQN and RDYN
   // Set your REQN and RDYN here before ble_begin() if you need
   //ble_set_pins(3, 2);
@@ -112,6 +140,7 @@ void setup()
      g_services_pipe_type_mapping, NUMBER_OF_PIPES,
      PIPE_UART_OVER_BTLE_UART_TX_TX, PIPE_UART_OVER_BTLE_UART_RX_RX,
      PIPE_DEVICE_INFORMATION_HARDWARE_REVISION_STRING_SET);
+#endif
 
   pinMode(kAutoCloseDisabledDIPin, INPUT_PULLUP);
   pinMode(kGarageOpenStatusDIPin, INPUT_PULLUP);
@@ -191,7 +220,7 @@ void loop()
     
     // read out signature, command and data
     for (int i=0; i<kSignatureLength; i++) {
-      rx_signature[i] = ble_read();
+      rx_signature[i] = ble_read();      
     }
 
     byte command = payload[0] = ble_read();
@@ -199,6 +228,7 @@ void loop()
     byte data1 = payload[2] = ble_read();
     byte data2 = payload[3] = ble_read();
 
+#ifndef USE_BLE_MINI
     Serial.print("Receiving <--- cmd: ");    
     Serial.print(command, HEX);
     Serial.print(" seq: ");    
@@ -208,23 +238,28 @@ void loop()
     Serial.print(" ");    
     Serial.print(data2, HEX);
     Serial.print("\n");
+#endif
     
     uint8_t *calc_signature = get_signature_for_bytes(payload, 4, kSharedKey, key_part.lunsign);    
     bool signature_matched = (strncmp((const char *)calc_signature, (const char *)rx_signature, kSignatureLength) == 0);
 
+#ifndef USE_BLE_MINI
     Serial.print("signature (");
     for (int i=0; i<kSignatureLength; i++) {
       Serial.print(rx_signature[i], HEX);
     }
     Serial.print(signature_matched ? ") ok\n" : ") invalid\n");
-      
+#endif
+
     switch (command) {
       case kCmdGetKeyPart:
         key_part.lunsign = random(0x7FFFFFFF);
 
+#ifndef USE_BLE_MINI
         Serial.print("kCmdGetKeyPart: ");
         Serial.print(key_part.lunsign, HEX);
         Serial.print("\n");    
+#endif
 
         ble_write(kResponseSignature);
         ble_write(sequence);
@@ -240,10 +275,12 @@ void loop()
         int diClosed = digitalRead(kGarageClosedStatusDIPin);
         int diOpen = digitalRead(kGarageOpenStatusDIPin);
 
+#ifndef USE_BLE_MINI
         Serial.print("kCmdGetStatus: ");
         Serial.print(diClosed);
         Serial.print(diOpen);
         Serial.print("\n");    
+#endif
 
         ble_write(kResponseSignature);
         ble_write(sequence);
@@ -260,18 +297,24 @@ void loop()
         if (data1 == 0x01) {
            success = signature_matched;
            if (success) {
+#ifndef USE_BLE_MINI
              Serial.print("kCmdControl(on) accepted\n");
+#endif
              digitalWrite(kGarageControlDOPin, HIGH);
            } else {
+#ifndef USE_BLE_MINI
              Serial.print("kCmdControl(on) signature mismatch");    
              Serial.print("\n");    
+#endif             
            }
 
            // reset key for next time           
            key_part.lunsign = 0;           
         } else {
           success = true;
+#ifndef USE_BLE_MINI
           Serial.print("kCmdControl(off) accepted\n");
+#endif
           digitalWrite(kGarageControlDOPin, LOW);
         }    
         
@@ -283,9 +326,11 @@ void loop()
       }
         
       default:
+#ifndef USE_BLE_MINI
         Serial.print("Invalid command: ");
         Serial.print(command);
         Serial.print("\n");
+#endif        
 
         ble_write(kResponseSignature);
         ble_write(sequence);
@@ -302,8 +347,10 @@ void loop()
     app_state = app_state_normal;
   }
   
+#ifndef USE_BLE_MINI
   // Allow BLE Shield to send/receive data
   ble_do_events();  
+#endif  
 }
 
 
