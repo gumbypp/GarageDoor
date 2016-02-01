@@ -14,6 +14,12 @@
 #import "BLE.h"
 #import "BLEDefines.h"
 
+@interface BLE  ()
+
+@property (strong, nonatomic) CBCentralManager *CM;
+
+@end
+
 @implementation BLE
 
 static bool isConnected = false;
@@ -154,15 +160,13 @@ static int rssi = 0;
     self.CM = [[CBCentralManager alloc] initWithDelegate:self queue:nil];
 }
 
-- (int)findBLEPeripherals:(int)timeout
+- (int)findBLEPeripherals
 {
     if (self.CM.state != CBCentralManagerStatePoweredOn) {
         NSLogWarn(@"CoreBluetooth not correctly initialized !");
         NSLogWarn(@"State = %d (%s)", self.CM.state, [self centralManagerStateToString:self.CM.state]);
         return -1;
     }
-    
-    [NSTimer scheduledTimerWithTimeInterval:(float)timeout target:self selector:@selector(scanTimer:) userInfo:nil repeats:NO];
     
 #if TARGET_OS_IPHONE
     [self.CM scanForPeripheralsWithServices:[NSArray arrayWithObject:[CBUUID UUIDWithString:@RBL_SERVICE_UUID]] options:nil];
@@ -175,12 +179,29 @@ static int rssi = 0;
     return 0; // Started scanning OK !
 }
 
+- (void)stopFindingPeripherals
+{
+    [self.CM stopScan];
+    
+    NSLogDebug(@"Stopped Scanning");
+    NSLogDebug(@"Known peripherals : %lu", (unsigned long)[self.peripherals count]);
+    
+    [self printKnownPeripherals];
+}
+
 - (void)connectPeripheral:(CBPeripheral *)peripheral
 {
     NSLogDebug(@"Connecting to peripheral with UUID : %@", peripheral.identifier.UUIDString);
     
     [self.CM connectPeripheral:peripheral
                        options:[NSDictionary dictionaryWithObject:[NSNumber numberWithBool:YES] forKey:CBConnectPeripheralOptionNotifyOnDisconnectionKey]];
+    self.connectingPeripheral = peripheral;
+}
+
+- (void)disconnectPeripheral:(CBPeripheral *)peripheral
+{
+    [self.CM cancelPeripheralConnection:peripheral];
+    self.connectingPeripheral = nil;
 }
 
 - (const char *)centralManagerStateToString:(int)state
@@ -204,16 +225,6 @@ static int rssi = 0;
     }
     
     return "Unknown state";
-}
-
-- (void)scanTimer:(NSTimer *)timer
-{
-    [self.CM stopScan];
-    
-    NSLogDebug(@"Stopped Scanning");
-    NSLogDebug(@"Known peripherals : %lu", (unsigned long)[self.peripherals count]);
-    
-    [self printKnownPeripherals];
 }
 
 - (void)printKnownPeripherals
@@ -373,6 +384,7 @@ static int rssi = 0;
 {
     if (!self.peripherals) {
         self.peripherals = [[NSMutableArray alloc] initWithObjects:peripheral,nil];
+        [[self delegate] ble:self didDiscoverPeripheral:peripheral];
     } else {
         for (int i = 0; i < self.peripherals.count; i++) {
             CBPeripheral *p = [self.peripherals objectAtIndex:i];
@@ -389,6 +401,7 @@ static int rssi = 0;
         }
         
         [self.peripherals addObject:peripheral];
+        [[self delegate] ble:self didDiscoverPeripheral:peripheral];
         
         NSLogDebug(@"New UUID, adding");
     }
@@ -411,13 +424,14 @@ static int rssi = 0;
 
 - (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error;
 {
+    self.connectingPeripheral = nil;
+
     NSLogDebug(@"error: %@", error);
     
     done = false;
     
     self.activePeripheral = nil;
-    [[self delegate] bleDidDisconnect];
-    
+    [[self delegate] ble:self didDisconnectPeripheral:peripheral];
     isConnected = false;
 }
 
@@ -438,8 +452,9 @@ static bool done = false;
             
             if ([service.UUID isEqual:s.UUID]) {
                 if (!done) {
+                    self.connectingPeripheral = nil;
                     [self enableReadNotification:self.activePeripheral];
-                    [[self delegate] bleDidConnect];
+                    [[self delegate] ble:self didConnectPeripheral:peripheral];
                     isConnected = true;
                     done = true;
                 }
@@ -494,14 +509,14 @@ static bool done = false;
                 len += data_len;
                 
                 if (len >= 64) {
-                    [[self delegate] bleDidReceiveData:buf length:len];
+                    [[self delegate] ble:self peripheral:peripheral didReceiveData:buf length:len];
                     len = 0;
                 }
             } else if (data_len < 20) {
                 memcpy(&buf[len], data, data_len);
                 len += data_len;
                 
-                [[self delegate] bleDidReceiveData:buf length:len];
+                [[self delegate] ble:self peripheral:peripheral didReceiveData:buf length:len];
                 len = 0;
             }
         }
@@ -518,7 +533,7 @@ static bool done = false;
     
     if (rssi != peripheral.RSSI.intValue) {
         rssi = peripheral.RSSI.intValue;
-        [[self delegate] bleDidUpdateRSSI:self.activePeripheral.RSSI];
+        [[self delegate] ble:self peripheral:peripheral didUpdateRSSI:self.activePeripheral.RSSI];
     }
 }
 

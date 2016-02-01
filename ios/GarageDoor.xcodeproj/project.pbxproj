@@ -350,6 +350,7 @@
 		291C7BD71648AE9100403B08 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ENABLE_BITCODE = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"/Users/gumbypp/pebble-dev/PebbleSDK-2.2/PebbleKit-iOS",
@@ -369,6 +370,7 @@
 		291C7BD81648AE9100403B08 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ENABLE_BITCODE = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"/Users/gumbypp/pebble-dev/PebbleSDK-2.2/PebbleKit-iOS",

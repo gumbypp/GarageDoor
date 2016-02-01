@@ -18,13 +18,15 @@
     #import <IOBluetooth/IOBluetooth.h>
 #endif
 
+@class BLE;
+
 @protocol BLEDelegate
-@optional
-- (void)bleDidConnect;
-- (void)bleDidDisconnect;
-- (void)bleDidUpdateRSSI:(NSNumber *)rssi;
-- (void)bleDidReceiveData:(unsigned char *)data length:(int)length;
 @required
+- (void)ble:(BLE *)ble didDiscoverPeripheral:(CBPeripheral *)peripheral;
+- (void)ble:(BLE *)ble didConnectPeripheral:(CBPeripheral *)peripheral;
+- (void)ble:(BLE *)ble didDisconnectPeripheral:(CBPeripheral *)peripheral;
+- (void)ble:(BLE *)ble peripheral:(CBPeripheral *)peripheral didUpdateRSSI:(NSNumber *)rssi;
+- (void)ble:(BLE *)ble peripheral:(CBPeripheral *)peripheral didReceiveData:(unsigned char *)data length:(int)length;
 @end
 
 @interface BLE : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate> {
@@ -33,7 +35,7 @@
 
 @property (nonatomic,assign) id <BLEDelegate> delegate;
 @property (strong, nonatomic) NSMutableArray *peripherals;
-@property (strong, nonatomic) CBCentralManager *CM;
+@property (strong, nonatomic) CBPeripheral *connectingPeripheral;
 @property (strong, nonatomic) CBPeripheral *activePeripheral;
 
 - (void)enableReadNotification:(CBPeripheral *)p;
@@ -45,12 +47,13 @@
 - (void)readRSSI;
 
 - (void)controlSetup;
-- (int)findBLEPeripherals:(int)timeout;
+- (int)findBLEPeripherals;
+- (void)stopFindingPeripherals;
 - (void)connectPeripheral:(CBPeripheral *)peripheral;
+- (void)disconnectPeripheral:(CBPeripheral *)peripheral;
 
 - (UInt16)swap:(UInt16)s;
 - (const char *)centralManagerStateToString:(int)state;
-- (void)scanTimer:(NSTimer *)timer;
 - (void)printKnownPeripherals;
 - (void)printPeripheralInfo:(CBPeripheral*)peripheral;
 

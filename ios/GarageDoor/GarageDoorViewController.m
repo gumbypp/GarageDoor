@@ -25,10 +25,18 @@
 #import "MD5/MD5.h"
 #import "PebbleManager.h"
 
-typedef enum {
+typedef NS_ENUM(NSInteger, BLEState)
+{
+    kBLEStateIdle,
+    kBLEStateScanning,
+    kBLEStateConnecting,
+    kBLEStateConnected
+};
+
+typedef NS_ENUM(NSInteger, RequestState) {
     kRequestStateIdle,
     kRequestStateSending
-} RequestState;
+};
 
 union long_hex {
     uint32_t lunsign;
@@ -41,6 +49,11 @@ union long_hex {
 };
 
 typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
+
+// comms
+#define kScanTimeout                15
+#define kConnectTimeout             5
+#define kPollInterval               1
 
 // transport
 #define kErrorDomain                @"GarageDoorViewController"
@@ -87,8 +100,9 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
 @property (nonatomic, weak) IBOutlet UIButton *btnActivate;
 @property (nonatomic, weak) IBOutlet UIActivityIndicatorView *indConnecting;
 
+@property (nonatomic, assign) BLEState bleState;
 @property (nonatomic, strong) BLE *ble;
-@property (nonatomic, strong) NSTimer *statusCheckTimer;
+@property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, assign) uint8_t sequenceNumber;
 @property (nonatomic, assign) uint8_t activeSequenceNumber;
 @property (nonatomic, assign) uint32_t keyPart;
@@ -122,6 +136,7 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
 
 - (void)commonInit
 {
+    _bleState = kBLEStateIdle;
     _transactionQueue = [[NSMutableArray alloc] init];
 }
 
@@ -139,6 +154,8 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     _ble.delegate = self;
     
     [PebbleManager sharedInstance].delegate = self;
+    
+    [self configureConnectButtonTitle:@"Connect" showProgress:NO enabled:YES];
 }
 
 #pragma mark - Internal methods
@@ -183,36 +200,58 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     return [NSData dataWithBytes:hash length:16];
 }
 
-- (void)connectOrDisconnect
+- (void)configureConnectButtonTitle:(NSString *)title showProgress:(BOOL)showProgress enabled:(BOOL)enabled
 {
-    if (self.ble.activePeripheral) {
-        if (self.ble.activePeripheral.state == CBPeripheralStateConnected) {
-            [[self.ble CM] cancelPeripheralConnection:[self.ble activePeripheral]];
-            return;
-        }
-    }
-    
-    if (self.ble.peripherals) {
-        self.ble.peripherals = nil;
-    }
-    
-    [self.btnConnect setEnabled:false];
-    [self.ble findBLEPeripherals:2];
-    
-    [NSTimer scheduledTimerWithTimeInterval:(float)2.0 target:self selector:@selector(connectionTimer:) userInfo:nil repeats:NO];
-    [self.indConnecting startAnimating];
-}
-
-- (void)connectionTimer:(NSTimer *)timer
-{
-    if (self.ble.peripherals.count > 0) {
-        [self.ble connectPeripheral:[self.ble.peripherals objectAtIndex:0]];
+    if (showProgress) {
+        [self.indConnecting startAnimating];
     } else {
         [self.indConnecting stopAnimating];
-        [self.btnConnect setEnabled:true];
-        [self.btnConnect setTitle:@"Connect" forState:UIControlStateNormal];
-        [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Connect",
-                                                              @(kMessageKeyRxLabelBtnDown): @"--" }];
+    }
+    
+    [self.btnConnect setEnabled:enabled];
+    [self.btnConnect setTitle:title forState:UIControlStateNormal];
+}
+
+- (void)connectOrDisconnect
+{
+    switch (self.bleState) {
+        case kBLEStateIdle:
+            if (self.ble.peripherals) {
+                self.ble.peripherals = nil;
+            }
+            
+            [self.ble findBLEPeripherals];
+            
+            self.timer = [NSTimer scheduledTimerWithTimeInterval:kScanTimeout target:self selector:@selector(timeout:) userInfo:nil repeats:NO];
+            [self configureConnectButtonTitle:@"Abort" showProgress:YES enabled:YES];
+            [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Abort",
+                                                                  @(kMessageKeyRxLabelBtnDown): @"--" }];
+            self.bleState = kBLEStateScanning;
+            break;
+            
+        case kBLEStateScanning:
+        case kBLEStateConnecting:
+            if (kBLEStateScanning == self.bleState) {
+                [self.ble stopFindingPeripherals];
+            } else {
+                NSAssert(self.ble.activePeripheral, @"must have connectingPeripheral");
+                [self.ble disconnectPeripheral:self.ble.connectingPeripheral];
+            }
+            
+            [self configureConnectButtonTitle:@"Connect" showProgress:NO enabled:YES];
+            [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Connect",
+                                                                  @(kMessageKeyRxLabelBtnDown): @"--" }];
+            self.bleState = kBLEStateIdle;
+            break;
+            
+        case kBLEStateConnected:
+            NSAssert(self.ble.activePeripheral, @"must have activePeripheral");
+            if (self.ble.activePeripheral.state == CBPeripheralStateConnected) {
+                [self.ble disconnectPeripheral:self.ble.activePeripheral];
+            } else {
+                self.bleState = kBLEStateIdle;
+            }
+            break;
     }
 }
 
@@ -340,46 +379,71 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     }
 }
 
-- (void)checkStatus:(NSTimer *)timer
+- (void)timeout:(NSTimer *)timer
 {
-    if (timer != self.statusCheckTimer) {
+    if (timer && (timer != self.timer)) {
         return;
     }
     
-    BOOL firstCheck = (timer == nil);
-
-    // dummy request data - not used
-    uint8_t buf[2] = { 0x00, 0x00 };
-    NSData *data = [[NSData alloc] initWithBytes:buf length:2];
-
-    [self queueOrSendMessageWithCommand:kCmdGetStatus payload:data withCompletionBlock:^(NSData *responseData, NSError *error) {
-        if (error) {
-            NSLogWarn(@"kCmdGetStatus failed: %@", [error description]);
-        } else {
-//            NSLogDebug(@"kCmdGetStatus response: %@", responseData);
-            if ([responseData length] == 2) {
-                BOOL doorFullyClosed = (((uint8_t *)[responseData bytes])[0]) ? YES : NO;
-                BOOL doorFullyOpen = (((uint8_t *)[responseData bytes])[1]) ? NO : YES;
-                
-                NSLogDebug(@"kCmdGetStatus doorFullyClosed: %u, doorFullyOpen: %u", doorFullyClosed, doorFullyOpen);
-
-                self.unknownDoorStateLabel.hidden = YES;
-
-                [UIView animateWithDuration:(firstCheck ? 0 : 0.5) animations:^{
-                    if (doorFullyOpen && doorFullyClosed) {
-                        // error state
-                        [[[UIAlertView alloc] initWithTitle:@"Error" message:@"Door open and closed at the same time" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
-                    } else if (doorFullyOpen) {
-                        self.garageDoorView.frame = CGRectMake(0, -self.garageDoorView.frame.size.height, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
-                    } else if (doorFullyClosed) {
-                        self.garageDoorView.frame = CGRectMake(0, 0, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
-                    } else if (!doorFullyOpen && !doorFullyClosed) {
-                        self.garageDoorView.frame = CGRectMake(0, -self.garageDoorView.frame.size.height/2, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
-                    }
-                }];
+    switch (self.bleState) {
+        case kBLEStateIdle:
+            break;
+            
+        case kBLEStateScanning:
+        case kBLEStateConnecting:
+            // failed...
+            if (kBLEStateScanning == self.bleState) {
+                [self.ble stopFindingPeripherals];
+            } else {
+                NSAssert(self.ble.activePeripheral, @"must have connectingPeripheral");
+                [self.ble disconnectPeripheral:self.ble.connectingPeripheral];
             }
+            
+            self.timer = nil;
+            [self configureConnectButtonTitle:@"Connect" showProgress:NO enabled:YES];
+            [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Connect",
+                                                                  @(kMessageKeyRxLabelBtnDown): @"--" }];
+            self.bleState = kBLEStateIdle;
+            break;
+            
+        case kBLEStateConnected: {
+            BOOL firstCheck = (timer == nil);
+            
+            // dummy request data - not used
+            uint8_t buf[2] = { 0x00, 0x00 };
+            NSData *data = [[NSData alloc] initWithBytes:buf length:2];
+            
+            [self queueOrSendMessageWithCommand:kCmdGetStatus payload:data withCompletionBlock:^(NSData *responseData, NSError *error) {
+                if (error) {
+                    NSLogWarn(@"kCmdGetStatus failed: %@", [error description]);
+                } else {
+                    //            NSLogDebug(@"kCmdGetStatus response: %@", responseData);
+                    if ([responseData length] == 2) {
+                        BOOL doorFullyClosed = (((uint8_t *)[responseData bytes])[0]) ? YES : NO;
+                        BOOL doorFullyOpen = (((uint8_t *)[responseData bytes])[1]) ? NO : YES;
+                        
+                        NSLogDebug(@"kCmdGetStatus doorFullyClosed: %u, doorFullyOpen: %u", doorFullyClosed, doorFullyOpen);
+                        
+                        self.unknownDoorStateLabel.hidden = YES;
+                        
+                        [UIView animateWithDuration:(firstCheck ? 0 : 0.5) animations:^{
+                            if (doorFullyOpen && doorFullyClosed) {
+                                // error state
+                                [[[UIAlertView alloc] initWithTitle:@"Error" message:@"Door open and closed at the same time" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
+                            } else if (doorFullyOpen) {
+                                self.garageDoorView.frame = CGRectMake(0, -self.garageDoorView.frame.size.height, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
+                            } else if (doorFullyClosed) {
+                                self.garageDoorView.frame = CGRectMake(0, 0, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
+                            } else if (!doorFullyOpen && !doorFullyClosed) {
+                                self.garageDoorView.frame = CGRectMake(0, -self.garageDoorView.frame.size.height/2, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
+                            }
+                        }];
+                    }
+                }
+            }];
+            break;
         }
-    }];
+    }
 }
 
 #pragma mark - Event handlers
@@ -411,23 +475,37 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
 
 #pragma mark - BLEDelegate methods
 
-- (void)bleDidConnect
+- (void)ble:(BLE *)ble didDiscoverPeripheral:(CBPeripheral *)peripheral
+{
+    [self.ble stopFindingPeripherals];
+
+    NSLogDebug(@"connecting to first peripheral");
+    [self.ble connectPeripheral:peripheral];
+
+    [self.timer invalidate];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:kConnectTimeout target:self selector:@selector(timeout:) userInfo:nil repeats:NO];
+    [self configureConnectButtonTitle:@"Abort" showProgress:YES enabled:YES];
+    [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Abort",
+                                                          @(kMessageKeyRxLabelBtnDown): @"--" }];
+    self.bleState = kBLEStateConnecting;
+}
+
+- (void)ble:(BLE *)ble didConnectPeripheral:(CBPeripheral *)peripheral
 {
     NSLogDebug(@"entered");
     
-    [self.indConnecting stopAnimating];
-    [self.btnConnect setEnabled:true];
-    [self.btnConnect setTitle:@"Disconnect" forState:UIControlStateNormal];
-    [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Disconnect",
-                                                          @(kMessageKeyRxLabelBtnDown): @"Activate" }];
-    
     self.btnActivate.enabled = YES;
 
-    [self checkStatus:nil];
-    self.statusCheckTimer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(checkStatus:) userInfo:nil repeats:YES];
+    [self.timer invalidate];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:kPollInterval target:self selector:@selector(timeout:) userInfo:nil repeats:YES];
+    [self configureConnectButtonTitle:@"Disconnect" showProgress:NO enabled:YES];
+    [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Disconnect",
+                                                          @(kMessageKeyRxLabelBtnDown): @"Activate" }];
+    self.bleState = kBLEStateConnected;
+    [self timeout:nil]; // force initial update now
 }
 
-- (void)bleDidDisconnect
+- (void)ble:(BLE *)ble didDisconnectPeripheral:(CBPeripheral *)peripheral
 {
     NSLogDebug(@"entered");
 
@@ -435,32 +513,30 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     self.garageDoorView.frame = CGRectMake(0, 0, self.garageDoorView.frame.size.width, self.garageDoorView.frame.size.height);
     self.unknownDoorStateLabel.hidden = NO;
 
-    [self.statusCheckTimer invalidate];
-    self.statusCheckTimer = nil;
-
     self.btnActivate.enabled = NO;
-
-    [self.indConnecting stopAnimating];
-    [self.btnConnect setEnabled:true];
-    [self.btnConnect setTitle:@"Connect" forState:UIControlStateNormal];
-    [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Connect",
-                                                          @(kMessageKeyRxLabelBtnDown): @"--" }];
 
     if (kRequestStateIdle != self.requestState) {
         [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeDisconnect userInfo:nil]];
     }
+    
+    [self.timer invalidate];
+    self.timer = nil;
+    [self configureConnectButtonTitle:@"Connect" showProgress:NO enabled:YES];
+    [[PebbleManager sharedInstance] sendMessageToWatch:@{ @(kMessageKeyRxLabelBtnSelect): @"Connect",
+                                                          @(kMessageKeyRxLabelBtnDown): @"--" }];
+    self.bleState = kBLEStateIdle;
 }
 
-- (void)bleDidUpdateRSSI:(NSNumber *)rssi
+- (void)ble:(BLE *)ble peripheral:(CBPeripheral *)peripheral didUpdateRSSI:(NSNumber *)rssi
 {
 }
 
-- (void)bleDidReceiveData:(unsigned char *)bytes length:(int)length
+- (void)ble:(BLE *)ble peripheral:(CBPeripheral *)peripheral didReceiveData:(unsigned char *)data length:(int)length
 {
     NSMutableString *result = [NSMutableString stringWithCapacity:length*3];
     
     for (int i=0; i<length; i++) {
-        [result appendFormat:@"%02X ", bytes[i]];
+        [result appendFormat:@"%02X ", data[i]];
     }
     
     NSLogDebug(@"received <--- %@", result);
@@ -468,16 +544,16 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     if (kRequestStateIdle != self.requestState) {
         if (length < kHeaderLen) {
             [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeResponseTooShort userInfo:nil]];
-        } else if (bytes[0] != kResponseSignature) {
+        } else if (data[0] != kResponseSignature) {
             [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeResponseInvalid userInfo:nil]];
-        } else if (bytes[1] != self.activeSequenceNumber) {
+        } else if (data[1] != self.activeSequenceNumber) {
             [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeSequenceMismatch userInfo:nil]];
-        } else if (bytes[2] == kResponseErrorSig) {
+        } else if (data[2] == kResponseErrorSig) {
             [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeAuthFailed userInfo:nil]];
-        } else if (bytes[3] != (length - kHeaderLen)) {
+        } else if (data[3] != (length - kHeaderLen)) {
             [self invokeCompletionHandlerWithData:nil error:[NSError errorWithDomain:kErrorDomain code:kErrorCodeLengthMismatch userInfo:nil]];
         } else {
-            NSMutableData *responseData = [[NSMutableData alloc] initWithBytes:bytes length:length];
+            NSMutableData *responseData = [[NSMutableData alloc] initWithBytes:data length:length];
             [responseData replaceBytesInRange:NSMakeRange(0, kHeaderLen) withBytes:NULL length:0];
             [self invokeCompletionHandlerWithData:responseData error:nil];
         }
