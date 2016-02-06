@@ -220,7 +220,7 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
                 self.ble.peripherals = nil;
             }
             
-            [self.ble findBLEPeripherals];
+            [self.ble findBLEPeripheralsWithName:@"BLE Shield"];
             
             self.timer = [NSTimer scheduledTimerWithTimeInterval:kScanTimeout target:self selector:@selector(timeout:) userInfo:nil repeats:NO];
             [self configureConnectButtonTitle:@"Abort" showProgress:YES enabled:YES];

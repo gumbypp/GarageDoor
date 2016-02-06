@@ -47,7 +47,7 @@
 - (void)readRSSI;
 
 - (void)controlSetup;
-- (int)findBLEPeripherals;
+- (int)findBLEPeripheralsWithName:(NSString *)name;
 - (void)stopFindingPeripherals;
 - (void)connectPeripheral:(CBPeripheral *)peripheral;
 - (void)disconnectPeripheral:(CBPeripheral *)peripheral;

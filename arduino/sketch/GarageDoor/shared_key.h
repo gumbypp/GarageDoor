@@ -10,6 +10,6 @@
 #define GarageDoor_shared_key_h
 
 // auth
-#define kSharedKey                    0x11223344
+#define kSharedKey                    0xd6db0ba7  // { 0xd6, 0xdb, 0x0b, 0xa7 }
 
 #endif

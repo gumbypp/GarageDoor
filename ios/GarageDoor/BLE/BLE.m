@@ -17,6 +17,7 @@
 @interface BLE  ()
 
 @property (strong, nonatomic) CBCentralManager *CM;
+@property (strong, nonatomic) NSString *discoverName;
 
 @end
 
@@ -160,7 +161,7 @@ static int rssi = 0;
     self.CM = [[CBCentralManager alloc] initWithDelegate:self queue:nil];
 }
 
-- (int)findBLEPeripherals
+- (int)findBLEPeripheralsWithName:(NSString *)name
 {
     if (self.CM.state != CBCentralManagerStatePoweredOn) {
         NSLogWarn(@"CoreBluetooth not correctly initialized !");
@@ -175,6 +176,8 @@ static int rssi = 0;
 #endif
     
     NSLogDebug(@"scanForPeripheralsWithServices");
+    
+    self.discoverName = name;
     
     return 0; // Started scanning OK !
 }
@@ -382,6 +385,11 @@ static int rssi = 0;
 
 - (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral advertisementData:(NSDictionary *)advertisementData RSSI:(NSNumber *)RSSI
 {
+    NSLogDebug(@"found: %@", peripheral.name);
+    if (self.discoverName && ![peripheral.name isEqualToString:self.discoverName]) {
+        return;
+    }
+    
     if (!self.peripherals) {
         self.peripherals = [[NSMutableArray alloc] initWithObjects:peripheral,nil];
         [[self delegate] ble:self didDiscoverPeripheral:peripheral];
