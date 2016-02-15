@@ -234,7 +234,7 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
             if (kBLEStateScanning == self.bleState) {
                 [self.ble stopFindingPeripherals];
             } else {
-                NSAssert(self.ble.activePeripheral, @"must have connectingPeripheral");
+                NSAssert(self.ble.connectingPeripheral, @"connectOrDisconnect - must have connectingPeripheral");
                 [self.ble disconnectPeripheral:self.ble.connectingPeripheral];
             }
             
@@ -339,17 +339,16 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
     buf[0] = on ? 0x01 : 0x00;
     NSData *data = [[NSData alloc] initWithBytes:buf length:2];
     
-    void (^controlLED)() = ^{
+    void (^controlButton)() = ^{
         NSLogDebug(@"kCmdControl request: %@", data);
         [self queueOrSendMessageWithCommand:kCmdControl payload:data withCompletionBlock:^(NSData *responseData, NSError *error) {
+            NSLogDebug(@"kCmdControl response: %@", responseData);
             if (error) {
                 [[[UIAlertView alloc] initWithTitle:@"Command failed"
                                             message:[NSString stringWithFormat:@"%@ - %@", data, error.localizedDescription]
                                            delegate:nil
                                   cancelButtonTitle:@"OK"
                                   otherButtonTitles:nil] show];
-            } else {
-                NSLogDebug(@"kCmdControl response: %@", responseData);
             }
         }];
     };
@@ -370,12 +369,12 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
                     self.keyPart = [self dwordForBigEndianData:responseData];
                     NSLogDebug(@"keyPart: %08x", self.keyPart);
                     
-                    controlLED();
+                    controlButton();
                 }
             }
         }];
     } else {
-        controlLED();
+        controlButton();
     }
 }
 
@@ -392,10 +391,11 @@ typedef void (^CompletionHandler)(NSData *responseData, NSError *error);
         case kBLEStateScanning:
         case kBLEStateConnecting:
             // failed...
+            NSLogWarn(@"failed during state %d", self.bleState);
             if (kBLEStateScanning == self.bleState) {
                 [self.ble stopFindingPeripherals];
             } else {
-                NSAssert(self.ble.activePeripheral, @"must have connectingPeripheral");
+                NSAssert(self.ble.connectingPeripheral, @"timeout - must have connectingPeripheral");
                 [self.ble disconnectPeripheral:self.ble.connectingPeripheral];
             }
             

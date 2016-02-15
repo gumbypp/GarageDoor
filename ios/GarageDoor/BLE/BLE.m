@@ -410,8 +410,6 @@ static int rssi = 0;
         
         [self.peripherals addObject:peripheral];
         [[self delegate] ble:self didDiscoverPeripheral:peripheral];
-        
-        NSLogDebug(@"New UUID, adding");
     }
     
     NSLogDebug(@"didDiscoverPeripheral");

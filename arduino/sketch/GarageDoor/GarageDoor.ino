@@ -93,11 +93,11 @@ uint8_t *get_signature_for_bytes(uint8_t *bytes, uint16_t length, uint32_t key1,
       return 0;
     }
     
-    byte data[12];    // length = 4 bytes + key1 + key2
+    uint8_t data[12];    // length = 4 bytes + key1 + key2
     memcpy(data, bytes, length);
     
     union long_hex lu;
-    byte *dest = &data[length];
+    uint8_t *dest = &data[length];
 
     lu.lunsign = key1;
     *dest++ = lu.lbytes.b3;
@@ -210,23 +210,23 @@ void timerCallback()
 
 void loop()
 {
-  static byte old_state = LOW;
+  static uint8_t old_state = LOW;
   
   // If data is ready
   while(ble_available())
   {
-    byte payload[4];
-    byte rx_signature[kSignatureLength];
+    uint8_t payload[4];
+    uint8_t rx_signature[kSignatureLength];
     
     // read out signature, command and data
     for (int i=0; i<kSignatureLength; i++) {
       rx_signature[i] = ble_read();      
     }
 
-    byte command = payload[0] = ble_read();
-    byte sequence = payload[1] = ble_read();
-    byte data1 = payload[2] = ble_read();
-    byte data2 = payload[3] = ble_read();
+    uint8_t command = payload[0] = ble_read();
+    uint8_t sequence = payload[1] = ble_read();
+    uint8_t data1 = payload[2] = ble_read();
+    uint8_t data2 = payload[3] = ble_read();
 
 #ifndef USE_BLE_MINI
     Serial.print("Receiving <--- cmd: ");    
@@ -240,8 +240,11 @@ void loop()
     Serial.print("\n");
 #endif
     
-    uint8_t *calc_signature = get_signature_for_bytes(payload, 4, kSharedKey, key_part.lunsign);    
-    bool signature_matched = (strncmp((const char *)calc_signature, (const char *)rx_signature, kSignatureLength) == 0);
+    bool signature_matched = false;
+    if (key_part.lunsign) {
+      uint8_t *calc_signature = get_signature_for_bytes(payload, 4, kSharedKey, key_part.lunsign);    
+      signature_matched = !memcmp(calc_signature, rx_signature, kSignatureLength);
+    }
 
 #ifndef USE_BLE_MINI
     Serial.print("signature (");
@@ -295,12 +298,12 @@ void loop()
         bool success = false;
         
         if (data1 == 0x01) {
-           success = signature_matched;
-           if (success) {
+           if (signature_matched) {
 #ifndef USE_BLE_MINI
              Serial.print("kCmdControl(on) accepted\n");
 #endif
              digitalWrite(kGarageControlDOPin, HIGH);
+             success = true;
            } else {
 #ifndef USE_BLE_MINI
              Serial.print("kCmdControl(on) signature mismatch");    
