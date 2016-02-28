@@ -385,8 +385,11 @@ static int rssi = 0;
 
 - (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral advertisementData:(NSDictionary *)advertisementData RSSI:(NSNumber *)RSSI
 {
-    NSLogDebug(@"found: %@", peripheral.name);
-    if (self.discoverName && ![peripheral.name isEqualToString:self.discoverName]) {
+    // this is more reliable than peripheral.name
+    NSString *peripheralName = advertisementData[@"kCBAdvDataLocalName"];
+    
+    NSLogDebug(@"found: %@", peripheralName);
+    if (self.discoverName && ![peripheralName isEqualToString:self.discoverName]) {
         return;
     }
     
@@ -410,9 +413,9 @@ static int rssi = 0;
         
         [self.peripherals addObject:peripheral];
         [[self delegate] ble:self didDiscoverPeripheral:peripheral];
+        
+        NSLogDebug(@"New UUID, adding");
     }
-    
-    NSLogDebug(@"didDiscoverPeripheral");
 }
 
 - (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral
